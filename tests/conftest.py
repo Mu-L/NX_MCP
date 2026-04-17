@@ -42,9 +42,14 @@ def create_mock_nxopen_modules() -> dict[str, types.ModuleType]:
 
     # Display
     display = types.ModuleType("NXOpen.Display")
-    display.Imaging = types.ModuleType("NXOpen.Display.Imaging")
+    display.Imaging = MagicMock()
     display.Imaging.FileType = MagicMock()
     nxopen.Display = display
+
+    # View
+    view_mod = types.ModuleType("NXOpen.View")
+    view_mod.ViewOrientation = MagicMock()
+    nxopen.View = view_mod
 
     # Annotations
     nxopen.Annotations = MagicMock()
@@ -59,7 +64,7 @@ def create_mock_nxopen_modules() -> dict[str, types.ModuleType]:
         "NXOpen": nxopen,
         "NXOpen.UF": uf,
         "NXOpen.Display": display,
-        "NXOpen.Display.Imaging": display.Imaging,
+        "NXOpen.View": view_mod,
     }
     return modules
 
