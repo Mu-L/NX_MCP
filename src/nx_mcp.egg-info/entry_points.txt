@@ -1,2 +1,0 @@
-[console_scripts]
-nx-mcp = nx_mcp.server:main
