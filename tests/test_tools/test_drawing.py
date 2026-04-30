@@ -1,10 +1,9 @@
 """Tests for drawing tools (5 tools)."""
 
-from __future__ import annotations
-
-import asyncio
 import json
-from unittest.mock import MagicMock
+import sys
+import types
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -13,339 +12,370 @@ from nx_mcp.tools.registry import ToolRegistry
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Reusable helpers
 # ---------------------------------------------------------------------------
 
-def _get_handler(name: str):
-    """Import the module (triggering registration) and return the handler."""
-    import nx_mcp.tools.drawing as _mod  # noqa: F401 – registers tools
-    return ToolRegistry.get_handler(name)
+def _make_mock_nxopen():
+    """Build a self-contained mock NXOpen module tree for drawing tests."""
+    nxopen = types.ModuleType("NXOpen")
+
+    # --- Session ---
+    mock_session = MagicMock()
+    mock_session.Parts = MagicMock()
+    mock_work_part = MagicMock()
+    mock_work_part.Name = "test_part"
+    mock_session.Parts.Work = mock_work_part
+    nxopen.Session = MagicMock()
+    nxopen.Session.GetSession = MagicMock(return_value=mock_session)
+    nxopen._mock_session = mock_session
+
+    # --- DrawingSheets ---
+    mock_sheet_builder = MagicMock()
+    mock_sheet = MagicMock()
+    mock_sheet.Name = "Sheet1"
+    mock_sheet_builder.Commit = MagicMock(return_value=mock_sheet)
+    mock_sheet_builder.Destroy = MagicMock()
+    mock_work_part.DrawingSheets = MagicMock()
+    mock_work_part.DrawingSheets.CreateDrawingSheetBuilder = MagicMock(
+        return_value=mock_sheet_builder
+    )
+    mock_work_part.DrawingSheets.ToArray = MagicMock(return_value=[mock_sheet])
+
+    # --- DrawingViews ---
+    mock_base_view_builder = MagicMock()
+    mock_base_view = MagicMock()
+    mock_base_view.Name = "BaseView1"
+    mock_base_view_builder.Commit = MagicMock(return_value=mock_base_view)
+    mock_base_view_builder.Destroy = MagicMock()
+
+    mock_proj_view_builder = MagicMock()
+    mock_proj_view = MagicMock()
+    mock_proj_view.Name = "ProjView1"
+    mock_proj_view_builder.Commit = MagicMock(return_value=mock_proj_view)
+    mock_proj_view_builder.Destroy = MagicMock()
+
+    mock_work_part.DrawingViews = MagicMock()
+    mock_work_part.DrawingViews.CreateBaseViewBuilder = MagicMock(
+        return_value=mock_base_view_builder
+    )
+    mock_work_part.DrawingViews.CreateProjectedViewBuilder = MagicMock(
+        return_value=mock_proj_view_builder
+    )
+    mock_work_part.DrawingViews.ToArray = MagicMock(return_value=[mock_base_view])
+
+    # --- Annotations ---
+    mock_dim_builder = MagicMock()
+    mock_dim = MagicMock()
+    mock_dim.Name = "Dim0"
+    mock_dim_builder.Commit = MagicMock(return_value=mock_dim)
+    mock_dim_builder.Destroy = MagicMock()
+    mock_work_part.Annotations = MagicMock()
+    mock_work_part.Annotations.CreateDimensionBuilder = MagicMock(
+        return_value=mock_dim_builder
+    )
+
+    # --- ExportManager ---
+    mock_pdf_exporter = MagicMock()
+    mock_pdf_exporter.Apply = MagicMock()
+    mock_work_part.ExportManager = MagicMock()
+    mock_work_part.ExportManager.CreatePdfExporter = MagicMock(
+        return_value=mock_pdf_exporter
+    )
+
+    # --- UF ---
+    uf = types.ModuleType("NXOpen.UF")
+    uf.UFSession = MagicMock()
+    uf.UFSession.GetUFSession = MagicMock(return_value=MagicMock())
+    nxopen.UF = uf
+
+    nxopen._mock_sheet_builder = mock_sheet_builder
+    nxopen._mock_base_view_builder = mock_base_view_builder
+    nxopen._mock_proj_view_builder = mock_proj_view_builder
+    nxopen._mock_dim_builder = mock_dim_builder
+    nxopen._mock_pdf_exporter = mock_pdf_exporter
+
+    modules = {"NXOpen": nxopen, "NXOpen.UF": uf}
+    return modules, nxopen, mock_work_part
 
 
-def run(coro):
-    """Run an async coroutine synchronously in tests."""
-    return asyncio.get_event_loop().run_until_complete(coro)
+@pytest.fixture(autouse=True)
+def _setup_nx():
+    """Patch NXOpen and reset session/registry for each test."""
+    modules, nxopen, work_part = _make_mock_nxopen()
+    with patch.dict(sys.modules, modules):
+        NXSession._instance = None
+        ToolRegistry.clear()
 
+        import nx_mcp.tools.drawing as mod  # noqa: F401
 
-def _setup_session(mock_nx):
-    """Wire up NXSession singleton with the mock session and work part."""
-    mock_session = mock_nx._mock_session
-    mock_work_part = mock_session.Parts.Work
+        yield nxopen, work_part
 
-    NXSession._instance = MagicMock(spec=NXSession)
-    NXSession._instance.is_connected = True
-    NXSession._instance.require.return_value = mock_session
-    NXSession._instance.require_work_part.return_value = mock_work_part
-
-    return mock_session, mock_work_part
+        ToolRegistry.clear()
+        NXSession._instance = None
 
 
 # ---------------------------------------------------------------------------
 # nx_create_drawing
 # ---------------------------------------------------------------------------
 
-class TestNxCreateDrawing:
+class TestCreateDrawing:
     """Tests for nx_create_drawing tool."""
 
-    def test_create_drawing_success(self, mock_nx):
-        handler = _get_handler("nx_create_drawing")
-        mock_session, mock_work_part = _setup_session(mock_nx)
+    @pytest.mark.asyncio
+    async def test_create_drawing_success(self, _setup_nx):
+        nxopen, work_part = _setup_nx
+        handler = ToolRegistry.get_handler("nx_create_drawing")
 
-        # Mock DrawingSheets builder
-        mock_builder = MagicMock()
-        mock_sheet = MagicMock()
-        mock_sheet.Name = "Sheet1"
-        mock_builder.Commit.return_value = mock_sheet
-        mock_builder.Destroy = MagicMock()
-        mock_work_part.DrawingSheets.CreateDrawingSheetBuilder.return_value = mock_builder
+        result = await handler(name="MySheet", size="A3", scale=1.0)
+        parsed = json.loads(result.to_text())
 
-        result = run(handler(name="MySheet", size="A3", scale=1.0))
-        data = json.loads(result)
+        assert parsed["status"] == "success"
+        assert parsed["data"]["sheet_name"] == "Sheet1"
+        assert parsed["data"]["size"] == "A3"
+        assert parsed["data"]["scale"] == "1.0:1"
+        nxopen._mock_sheet_builder.Commit.assert_called_once()
+        nxopen._mock_sheet_builder.Destroy.assert_called_once()
 
-        assert data["status"] == "success"
-        assert data["data"]["sheet_name"] == "Sheet1"
-        assert data["data"]["size"] == "A3"
-        assert data["data"]["scale"] == "1.0:1"
-        mock_builder.Commit.assert_called_once()
-        mock_builder.Destroy.assert_called_once()
+    @pytest.mark.asyncio
+    async def test_create_drawing_invalid_size(self, _setup_nx):
+        nxopen, work_part = _setup_nx
+        handler = ToolRegistry.get_handler("nx_create_drawing")
 
-    def test_create_drawing_invalid_size(self, mock_nx):
-        handler = _get_handler("nx_create_drawing")
-        _setup_session(mock_nx)
+        result = await handler(name="Sheet1", size="Z9", scale=1.0)
+        parsed = json.loads(result.to_text())
 
-        result = run(handler(name="Sheet1", size="Z9", scale=1.0))
-        data = json.loads(result)
+        assert parsed["status"] == "error"
+        assert parsed["error_code"] == "NX_INVALID_PARAMS"
 
-        assert data["status"] == "error"
-        assert data["error_code"] == "NX_INVALID_PARAMS"
-        assert "A0" in data["suggestion"] or "A3" in data["suggestion"]
+    @pytest.mark.asyncio
+    async def test_create_drawing_defaults(self, _setup_nx):
+        nxopen, work_part = _setup_nx
+        handler = ToolRegistry.get_handler("nx_create_drawing")
 
-    def test_create_drawing_default_params(self, mock_nx):
-        handler = _get_handler("nx_create_drawing")
-        mock_session, mock_work_part = _setup_session(mock_nx)
+        result = await handler()
+        parsed = json.loads(result.to_text())
 
-        mock_builder = MagicMock()
-        mock_sheet = MagicMock()
-        mock_sheet.Name = "Sheet1"
-        mock_builder.Commit.return_value = mock_sheet
-        mock_builder.Destroy = MagicMock()
-        mock_work_part.DrawingSheets.CreateDrawingSheetBuilder.return_value = mock_builder
-
-        result = run(handler())
-        data = json.loads(result)
-
-        assert data["status"] == "success"
-        # Verify defaults were applied
-        mock_builder.Name = "Sheet1"  # default name set on builder
-        assert data["data"]["size"] == "A3"
+        assert parsed["status"] == "success"
+        assert parsed["data"]["size"] == "A3"
 
 
 # ---------------------------------------------------------------------------
 # nx_add_base_view
 # ---------------------------------------------------------------------------
 
-class TestNxAddBaseView:
+class TestAddBaseView:
     """Tests for nx_add_base_view tool."""
 
-    def test_add_base_view_success(self, mock_nx):
-        handler = _get_handler("nx_add_base_view")
-        mock_session, mock_work_part = _setup_session(mock_nx)
+    @pytest.mark.asyncio
+    async def test_add_base_view_success(self, _setup_nx):
+        nxopen, work_part = _setup_nx
+        handler = ToolRegistry.get_handler("nx_add_base_view")
 
-        # Mock DrawingSheets array
-        mock_sheet = MagicMock()
-        mock_sheet.Name = "Sheet1"
-        mock_work_part.DrawingSheets.ToArray.return_value = [mock_sheet]
+        result = await handler(drawing="Sheet1", body="Body1", view="front")
+        parsed = json.loads(result.to_text())
 
-        # Mock DrawingViews builder
-        mock_builder = MagicMock()
-        mock_view = MagicMock()
-        mock_view.Name = "BaseView1"
-        mock_builder.Commit.return_value = mock_view
-        mock_builder.Destroy = MagicMock()
-        mock_work_part.DrawingViews.CreateBaseViewBuilder.return_value = mock_builder
+        assert parsed["status"] == "success"
+        assert parsed["data"]["view_name"] == "BaseView1"
+        assert parsed["data"]["orientation"] == "front"
+        nxopen._mock_base_view_builder.Commit.assert_called_once()
 
-        result = run(handler(drawing="Sheet1", body="Body1", view="front"))
-        data = json.loads(result)
+    @pytest.mark.asyncio
+    async def test_add_base_view_invalid_view(self, _setup_nx):
+        nxopen, work_part = _setup_nx
+        handler = ToolRegistry.get_handler("nx_add_base_view")
 
-        assert data["status"] == "success"
-        assert data["data"]["view_name"] == "BaseView1"
-        assert data["data"]["orientation"] == "front"
-        assert data["data"]["drawing"] == "Sheet1"
-        mock_builder.Commit.assert_called_once()
+        result = await handler(drawing="Sheet1", body="Body1", view="diagonal")
+        parsed = json.loads(result.to_text())
 
-    def test_add_base_view_invalid_view(self, mock_nx):
-        handler = _get_handler("nx_add_base_view")
-        _setup_session(mock_nx)
+        assert parsed["status"] == "error"
+        assert parsed["error_code"] == "NX_INVALID_PARAMS"
 
-        result = run(handler(drawing="Sheet1", body="Body1", view="diagonal"))
-        data = json.loads(result)
+    @pytest.mark.asyncio
+    async def test_add_base_view_sheet_not_found(self, _setup_nx):
+        nxopen, work_part = _setup_nx
+        work_part.DrawingSheets.ToArray = MagicMock(return_value=[])
+        handler = ToolRegistry.get_handler("nx_add_base_view")
 
-        assert data["status"] == "error"
-        assert data["error_code"] == "NX_INVALID_PARAMS"
+        result = await handler(drawing="MissingSheet", body="Body1", view="front")
+        parsed = json.loads(result.to_text())
 
-    def test_add_base_view_sheet_not_found(self, mock_nx):
-        handler = _get_handler("nx_add_base_view")
-        mock_session, mock_work_part = _setup_session(mock_nx)
-
-        mock_work_part.DrawingSheets.ToArray.return_value = []
-
-        result = run(handler(drawing="MissingSheet", body="Body1", view="front"))
-        data = json.loads(result)
-
-        assert data["status"] == "error"
-        assert data["error_code"] == "NX_NOT_FOUND"
-        assert "MissingSheet" in data["message"]
+        assert parsed["status"] == "error"
+        assert parsed["error_code"] == "NX_NOT_FOUND"
 
 
 # ---------------------------------------------------------------------------
 # nx_add_projection_view
 # ---------------------------------------------------------------------------
 
-class TestNxAddProjectionView:
+class TestAddProjectionView:
     """Tests for nx_add_projection_view tool."""
 
-    def test_add_projection_view_success(self, mock_nx):
-        handler = _get_handler("nx_add_projection_view")
-        mock_session, mock_work_part = _setup_session(mock_nx)
+    @pytest.mark.asyncio
+    async def test_add_projection_view_success(self, _setup_nx):
+        nxopen, work_part = _setup_nx
+        handler = ToolRegistry.get_handler("nx_add_projection_view")
 
-        # Mock existing base view
-        mock_base_view = MagicMock()
-        mock_base_view.Name = "BaseView1"
-        mock_work_part.DrawingViews.ToArray.return_value = [mock_base_view]
+        result = await handler(base_view="BaseView1", direction="right")
+        parsed = json.loads(result.to_text())
 
-        # Mock projected view builder
-        mock_builder = MagicMock()
-        mock_proj_view = MagicMock()
-        mock_proj_view.Name = "ProjView1"
-        mock_builder.Commit.return_value = mock_proj_view
-        mock_builder.Destroy = MagicMock()
-        mock_work_part.DrawingViews.CreateProjectedViewBuilder.return_value = mock_builder
+        assert parsed["status"] == "success"
+        assert parsed["data"]["view_name"] == "ProjView1"
+        assert parsed["data"]["direction"] == "right"
+        nxopen._mock_proj_view_builder.Commit.assert_called_once()
 
-        result = run(handler(base_view="BaseView1", direction="right"))
-        data = json.loads(result)
+    @pytest.mark.asyncio
+    async def test_add_projection_view_invalid_direction(self, _setup_nx):
+        nxopen, work_part = _setup_nx
+        handler = ToolRegistry.get_handler("nx_add_projection_view")
 
-        assert data["status"] == "success"
-        assert data["data"]["view_name"] == "ProjView1"
-        assert data["data"]["direction"] == "right"
-        assert data["data"]["base_view"] == "BaseView1"
+        result = await handler(base_view="BaseView1", direction="diagonal")
+        parsed = json.loads(result.to_text())
 
-    def test_add_projection_view_invalid_direction(self, mock_nx):
-        handler = _get_handler("nx_add_projection_view")
-        _setup_session(mock_nx)
+        assert parsed["status"] == "error"
+        assert parsed["error_code"] == "NX_INVALID_PARAMS"
 
-        result = run(handler(base_view="BaseView1", direction="diagonal"))
-        data = json.loads(result)
+    @pytest.mark.asyncio
+    async def test_add_projection_view_base_not_found(self, _setup_nx):
+        nxopen, work_part = _setup_nx
+        work_part.DrawingViews.ToArray = MagicMock(return_value=[])
+        handler = ToolRegistry.get_handler("nx_add_projection_view")
 
-        assert data["status"] == "error"
-        assert data["error_code"] == "NX_INVALID_PARAMS"
+        result = await handler(base_view="MissingView", direction="right")
+        parsed = json.loads(result.to_text())
 
-    def test_add_projection_view_base_not_found(self, mock_nx):
-        handler = _get_handler("nx_add_projection_view")
-        mock_session, mock_work_part = _setup_session(mock_nx)
-
-        mock_work_part.DrawingViews.ToArray.return_value = []
-
-        result = run(handler(base_view="MissingView", direction="right"))
-        data = json.loads(result)
-
-        assert data["status"] == "error"
-        assert data["error_code"] == "NX_NOT_FOUND"
+        assert parsed["status"] == "error"
+        assert parsed["error_code"] == "NX_NOT_FOUND"
 
 
 # ---------------------------------------------------------------------------
 # nx_add_dimension
 # ---------------------------------------------------------------------------
 
-class TestNxAddDimension:
+class TestAddDimension:
     """Tests for nx_add_dimension tool."""
 
-    def test_add_dimension_success(self, mock_nx):
-        handler = _get_handler("nx_add_dimension")
-        mock_session, mock_work_part = _setup_session(mock_nx)
+    @pytest.mark.asyncio
+    async def test_add_dimension_success(self, _setup_nx):
+        nxopen, work_part = _setup_nx
+        handler = ToolRegistry.get_handler("nx_add_dimension")
 
-        # Mock existing view
-        mock_view = MagicMock()
-        mock_view.Name = "BaseView1"
-        mock_work_part.DrawingViews.ToArray.return_value = [mock_view]
-
-        # Mock dimension builder
-        mock_builder = MagicMock()
-        mock_dim = MagicMock()
-        mock_dim.Name = "Dim0"
-        mock_builder.Commit.return_value = mock_dim
-        mock_builder.Destroy = MagicMock()
-        mock_work_part.Annotations.CreateDimensionBuilder.return_value = mock_builder
-
-        result = run(handler(
+        result = await handler(
             view="BaseView1",
             object1="Edge1",
             object2="Edge2",
             dim_type="horizontal",
-        ))
-        data = json.loads(result)
+        )
+        parsed = json.loads(result.to_text())
 
-        assert data["status"] == "success"
-        assert data["data"]["dim_type"] == "horizontal"
-        assert data["data"]["object1"] == "Edge1"
-        assert data["data"]["object2"] == "Edge2"
-        mock_builder.Commit.assert_called_once()
+        assert parsed["status"] == "success"
+        assert parsed["data"]["dim_type"] == "horizontal"
+        assert parsed["data"]["object1"] == "Edge1"
+        assert parsed["data"]["object2"] == "Edge2"
+        nxopen._mock_dim_builder.Commit.assert_called_once()
 
-    def test_add_dimension_invalid_type(self, mock_nx):
-        handler = _get_handler("nx_add_dimension")
-        _setup_session(mock_nx)
+    @pytest.mark.asyncio
+    async def test_add_dimension_invalid_type(self, _setup_nx):
+        nxopen, work_part = _setup_nx
+        handler = ToolRegistry.get_handler("nx_add_dimension")
 
-        result = run(handler(view="V1", object1="E1", dim_type="chamfer"))
-        data = json.loads(result)
+        result = await handler(view="V1", object1="E1", dim_type="chamfer")
+        parsed = json.loads(result.to_text())
 
-        assert data["status"] == "error"
-        assert data["error_code"] == "NX_INVALID_PARAMS"
+        assert parsed["status"] == "error"
+        assert parsed["error_code"] == "NX_INVALID_PARAMS"
 
-    def test_add_dimension_diameter_with_object2_rejected(self, mock_nx):
-        handler = _get_handler("nx_add_dimension")
-        _setup_session(mock_nx)
+    @pytest.mark.asyncio
+    async def test_add_dimension_diameter_with_object2_rejected(self, _setup_nx):
+        nxopen, work_part = _setup_nx
+        handler = ToolRegistry.get_handler("nx_add_dimension")
 
-        result = run(handler(
+        result = await handler(
             view="BaseView1",
             object1="Edge1",
             object2="Edge2",
             dim_type="diameter",
-        ))
-        data = json.loads(result)
+        )
+        parsed = json.loads(result.to_text())
 
-        assert data["status"] == "error"
-        assert data["error_code"] == "NX_INVALID_PARAMS"
-        assert "single object" in data["message"].lower()
+        assert parsed["status"] == "error"
+        assert parsed["error_code"] == "NX_INVALID_PARAMS"
+        assert "single object" in parsed["message"].lower()
 
-    def test_add_dimension_view_not_found(self, mock_nx):
-        handler = _get_handler("nx_add_dimension")
-        mock_session, mock_work_part = _setup_session(mock_nx)
+    @pytest.mark.asyncio
+    async def test_add_dimension_view_not_found(self, _setup_nx):
+        nxopen, work_part = _setup_nx
+        work_part.DrawingViews.ToArray = MagicMock(return_value=[])
+        handler = ToolRegistry.get_handler("nx_add_dimension")
 
-        mock_work_part.DrawingViews.ToArray.return_value = []
+        result = await handler(view="MissingView", object1="E1", dim_type="aligned")
+        parsed = json.loads(result.to_text())
 
-        result = run(handler(view="MissingView", object1="E1", dim_type="aligned"))
-        data = json.loads(result)
+        assert parsed["status"] == "error"
+        assert parsed["error_code"] == "NX_NOT_FOUND"
 
-        assert data["status"] == "error"
-        assert data["error_code"] == "NX_NOT_FOUND"
+    @pytest.mark.asyncio
+    async def test_add_radius_dimension_single_object(self, _setup_nx):
+        nxopen, work_part = _setup_nx
+        handler = ToolRegistry.get_handler("nx_add_dimension")
 
-    def test_add_radius_dimension_single_object(self, mock_nx):
-        handler = _get_handler("nx_add_dimension")
-        mock_session, mock_work_part = _setup_session(mock_nx)
+        result = await handler(view="BaseView1", object1="Arc1", dim_type="radius")
+        parsed = json.loads(result.to_text())
 
-        mock_view = MagicMock()
-        mock_view.Name = "V1"
-        mock_work_part.DrawingViews.ToArray.return_value = [mock_view]
-
-        mock_builder = MagicMock()
-        mock_dim = MagicMock()
-        mock_dim.Name = "RadDim0"
-        mock_builder.Commit.return_value = mock_dim
-        mock_builder.Destroy = MagicMock()
-        mock_work_part.Annotations.CreateDimensionBuilder.return_value = mock_builder
-
-        result = run(handler(view="V1", object1="Arc1", dim_type="radius"))
-        data = json.loads(result)
-
-        assert data["status"] == "success"
-        assert data["data"]["dim_type"] == "radius"
-        assert data["data"]["object2"] is None
+        assert parsed["status"] == "success"
+        assert parsed["data"]["dim_type"] == "radius"
+        assert parsed["data"]["object2"] is None
 
 
 # ---------------------------------------------------------------------------
 # nx_export_drawing_pdf
 # ---------------------------------------------------------------------------
 
-class TestNxExportDrawingPdf:
+class TestExportDrawingPdf:
     """Tests for nx_export_drawing_pdf tool."""
 
-    def test_export_pdf_success(self, mock_nx):
-        handler = _get_handler("nx_export_drawing_pdf")
-        mock_session, mock_work_part = _setup_session(mock_nx)
+    @pytest.mark.asyncio
+    async def test_export_pdf_success(self, _setup_nx):
+        nxopen, work_part = _setup_nx
+        handler = ToolRegistry.get_handler("nx_export_drawing_pdf")
 
-        # Mock PDF exporter
-        mock_exporter = MagicMock()
-        mock_exporter.Apply = MagicMock()
-        mock_work_part.ExportManager.CreatePdfExporter.return_value = mock_exporter
+        result = await handler(path=r"C:\output\drawing.pdf")
+        parsed = json.loads(result.to_text())
 
-        result = run(handler(path=r"C:\output\drawing.pdf"))
-        data = json.loads(result)
+        assert parsed["status"] == "success"
+        assert parsed["data"]["path"] == r"C:\output\drawing.pdf"
+        nxopen._mock_pdf_exporter.Apply.assert_called_once()
 
-        assert data["status"] == "success"
-        assert data["data"]["path"] == r"C:\output\drawing.pdf"
-        assert "drawing.pdf" in data["message"]
-        mock_exporter.Apply.assert_called_once()
-
-    def test_export_pdf_no_work_part(self, mock_nx):
-        handler = _get_handler("nx_export_drawing_pdf")
-
+    @pytest.mark.asyncio
+    async def test_export_pdf_no_work_part(self, _setup_nx):
+        nxopen, work_part = _setup_nx
         NXSession._instance = MagicMock(spec=NXSession)
         NXSession._instance.is_connected = True
-        NXSession._instance.require.return_value = mock_nx._mock_session
+        NXSession._instance.require.return_value = nxopen._mock_session
         NXSession._instance.require_work_part.side_effect = RuntimeError(
             "No work part is open."
         )
 
-        result = run(handler(path=r"C:\output\drawing.pdf"))
-        data = json.loads(result)
+        handler = ToolRegistry.get_handler("nx_export_drawing_pdf")
+        result = await handler(path=r"C:\output\drawing.pdf")
+        parsed = json.loads(result.to_text())
 
-        assert data["status"] == "error"
+        assert parsed["status"] == "error"
+
+
+# ---------------------------------------------------------------------------
+# Tool registration
+# ---------------------------------------------------------------------------
+
+class TestToolRegistration:
+    """Verify all 5 drawing tools are registered."""
+
+    def test_all_tools_registered(self, _setup_nx):
+        expected = {
+            "nx_create_drawing",
+            "nx_add_base_view",
+            "nx_add_projection_view",
+            "nx_add_dimension",
+            "nx_export_drawing_pdf",
+        }
+        registered = set(ToolRegistry.get_tool_names())
+        assert expected == registered

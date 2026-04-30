@@ -76,8 +76,18 @@ def _make_mock_nxopen():
     nxopen._created_builders = _created_builders
 
     # --- Sketches ---
+    def _make_named(name):
+        obj = MagicMock()
+        obj.Name = name
+        return obj
+
+    mock_sketches = [_make_named("Circle1"), _make_named("Path1")]
     mock_work_part.Sketches = MagicMock()
-    mock_work_part.Sketches.ToArray = MagicMock(return_value=[])
+    mock_work_part.Sketches.ToArray = MagicMock(return_value=mock_sketches)
+
+    # --- Curves ---
+    mock_work_part.Curves = MagicMock()
+    mock_work_part.Curves.ToArray = MagicMock(return_value=[])
 
     # --- Vector3d ---
     nxopen.Vector3d = MagicMock(return_value=MagicMock())
@@ -269,6 +279,208 @@ class TestDeleteFeature:
         parsed = json.loads(result.to_text())
 
         assert parsed["status"] == "error"
+
+
+class TestRevolve:
+    """Test nx_revolve tool."""
+
+    @pytest.mark.asyncio
+    async def test_revolve_success(self, _setup_nx):
+        nxopen, work_part = _setup_nx
+        handler = ToolRegistry.get_handler("nx_revolve")
+        assert handler is not None
+
+        result = await handler(angle=360.0, axis="Z")
+        parsed = json.loads(result.to_text())
+
+        assert parsed["status"] == "success"
+        assert parsed["data"]["angle"] == 360.0
+        assert parsed["data"]["axis"] == "Z"
+        work_part.Features.CreateRevolveBuilder.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_revolve_partial_angle(self, _setup_nx):
+        nxopen, work_part = _setup_nx
+        handler = ToolRegistry.get_handler("nx_revolve")
+
+        result = await handler(angle=90.0, axis="X", boolean="unite")
+        parsed = json.loads(result.to_text())
+
+        assert parsed["status"] == "success"
+        assert parsed["data"]["angle"] == 90.0
+        assert parsed["data"]["axis"] == "X"
+
+    @pytest.mark.asyncio
+    async def test_revolve_invalid_axis(self, _setup_nx):
+        nxopen, work_part = _setup_nx
+        handler = ToolRegistry.get_handler("nx_revolve")
+
+        result = await handler(axis="W")
+        parsed = json.loads(result.to_text())
+
+        assert parsed["status"] == "error"
+
+
+class TestSweep:
+    """Test nx_sweep tool."""
+
+    @pytest.mark.asyncio
+    async def test_sweep_success(self, _setup_nx):
+        nxopen, work_part = _setup_nx
+        handler = ToolRegistry.get_handler("nx_sweep")
+        assert handler is not None
+
+        result = await handler(section="Circle1", guide="Path1")
+        parsed = json.loads(result.to_text())
+
+        assert parsed["status"] == "success"
+        assert parsed["data"]["section"] == "Circle1"
+        assert parsed["data"]["guide"] == "Path1"
+        work_part.Features.CreateSweepBuilder.assert_called_once()
+
+        builders = nxopen._created_builders
+        assert any(b.Commit.called for b in builders)
+        assert any(b.Destroy.called for b in builders)
+
+
+class TestChamfer:
+    """Test nx_chamfer tool."""
+
+    @pytest.mark.asyncio
+    async def test_chamfer_success(self, _setup_nx):
+        nxopen, work_part = _setup_nx
+        handler = ToolRegistry.get_handler("nx_chamfer")
+        assert handler is not None
+
+        result = await handler(edges=["Edge1", "Edge2"], offset=2.0)
+        parsed = json.loads(result.to_text())
+
+        assert parsed["status"] == "success"
+        assert parsed["data"]["offset"] == 2.0
+        assert parsed["data"]["edges"] == ["Edge1", "Edge2"]
+        work_part.Features.CreateChamferBuilder.assert_called_once()
+
+        builders = nxopen._created_builders
+        assert any(b.Commit.called for b in builders)
+        assert any(b.Destroy.called for b in builders)
+
+
+class TestHole:
+    """Test nx_hole tool."""
+
+    @pytest.mark.asyncio
+    async def test_hole_success(self, _setup_nx):
+        nxopen, work_part = _setup_nx
+        handler = ToolRegistry.get_handler("nx_hole")
+        assert handler is not None
+
+        result = await handler(diameter=10.0, depth=25.0, x=50.0, y=30.0, z=0.0)
+        parsed = json.loads(result.to_text())
+
+        assert parsed["status"] == "success"
+        assert parsed["data"]["diameter"] == 10.0
+        assert parsed["data"]["depth"] == 25.0
+        assert parsed["data"]["location"] == [50.0, 30.0, 0.0]
+        work_part.Features.CreateHoleBuilder.assert_called_once()
+
+
+class TestPattern:
+    """Test nx_pattern tool."""
+
+    @pytest.mark.asyncio
+    async def test_pattern_success(self, _setup_nx):
+        nxopen, work_part = _setup_nx
+        handler = ToolRegistry.get_handler("nx_pattern")
+        assert handler is not None
+
+        result = await handler(
+            features=["Extrude(1)"],
+            pattern_type="linear",
+            count=5,
+            spacing=20.0,
+            direction="X",
+        )
+        parsed = json.loads(result.to_text())
+
+        assert parsed["status"] == "success"
+        assert parsed["data"]["count"] == 5
+        assert parsed["data"]["spacing"] == 20.0
+        assert parsed["data"]["features"] == ["Extrude(1)"]
+        work_part.Features.CreatePatternBuilder.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_pattern_invalid_direction(self, _setup_nx):
+        nxopen, work_part = _setup_nx
+        handler = ToolRegistry.get_handler("nx_pattern")
+
+        result = await handler(
+            features=["Extrude(1)"],
+            pattern_type="linear",
+            count=3,
+            spacing=10.0,
+            direction="W",
+        )
+        parsed = json.loads(result.to_text())
+
+        assert parsed["status"] == "error"
+
+
+class TestMirrorBody:
+    """Test nx_mirror_body tool."""
+
+    @pytest.mark.asyncio
+    async def test_mirror_success(self, _setup_nx):
+        nxopen, work_part = _setup_nx
+        handler = ToolRegistry.get_handler("nx_mirror_body")
+        assert handler is not None
+
+        result = await handler(body="Body1", plane="DatumPlane1")
+        parsed = json.loads(result.to_text())
+
+        assert parsed["status"] == "success"
+        assert parsed["data"]["body"] == "Body1"
+        assert parsed["data"]["plane"] == "DatumPlane1"
+        work_part.Features.CreateMirrorBodyBuilder.assert_called_once()
+
+        builders = nxopen._created_builders
+        assert any(b.Commit.called for b in builders)
+        assert any(b.Destroy.called for b in builders)
+
+
+class TestEditFeature:
+    """Test nx_edit_feature tool."""
+
+    @pytest.mark.asyncio
+    async def test_edit_feature_success(self, _setup_nx):
+        nxopen, work_part = _setup_nx
+
+        mock_feat = MagicMock()
+        mock_feat.Name = "Extrude(1)"
+        mock_expr = MagicMock()
+        mock_feat.GetExpression = MagicMock(return_value=mock_expr)
+        work_part.Features.ToArray = MagicMock(return_value=[mock_feat])
+
+        handler = ToolRegistry.get_handler("nx_edit_feature")
+        result = await handler(name="Extrude(1)", params={"p0": 50.0})
+        parsed = json.loads(result.to_text())
+
+        assert parsed["status"] == "success"
+        assert parsed["data"]["feature"] == "Extrude(1)"
+        assert parsed["data"]["updated"] == {"p0": 50.0}
+        mock_feat.GetExpression.assert_called_once_with("p0")
+        mock_expr.SetFormula.assert_called_once_with("50.0")
+
+    @pytest.mark.asyncio
+    async def test_edit_feature_not_found(self, _setup_nx):
+        nxopen, work_part = _setup_nx
+        work_part.Features.ToArray = MagicMock(return_value=[])
+
+        handler = ToolRegistry.get_handler("nx_edit_feature")
+        result = await handler(name="NonExistent", params={"p0": 10.0})
+        parsed = json.loads(result.to_text())
+
+        assert parsed["status"] == "error"
+        assert "NonExistent" in parsed["message"]
 
 
 class TestToolRegistration:

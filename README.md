@@ -5,14 +5,15 @@ programmatically control NX's GUI for CAD operations.
 
 ## Features
 
-- **~47 MCP tools** covering core CAD operations
+- **47 MCP tools** covering core CAD operations
 - File operations: create, open, save, close, export, import
 - Sketching: lines, arcs, rectangles, constraints
-- Modeling: extrude, revolve, sweep, blend, chamfer, hole, pattern, boolean
+- Modeling: extrude, revolve, sweep, blend, chamfer, hole, pattern, boolean, mirror
 - Assembly: add components, mate, list, reposition
 - Drawing: create sheets, add views, dimensions, export PDF
 - Measurement: distance, angle, volume
 - Utility: view control, undo, screenshot, journal recording
+- Feature tree: list features, inspect parameters, bounding box
 
 ## Prerequisites
 
@@ -86,19 +87,23 @@ AI Agent <-> MCP Protocol (stdio) <-> MCP Server (Python) <-> NX Open API <-> NX
 ```
 src/nx_mcp/
   server.py          # MCP server entry point
-  nx_session.py      # NX session wrapper
-  response.py        # Response types
-  tools/             # ~47 MCP tools
-    file_ops.py      # File operations
-    sketch.py        # Sketch tools
-    modeling.py      # Modeling features
-    feature_tree.py  # Feature queries
-    assembly.py      # Assembly tools
-    drawing.py       # Drawing tools
-    measure.py       # Measurement tools
-    utility.py       # View, undo, screenshot, journal
-  journal/           # Journal subsystem
-  utils/             # Utilities
+  nx_session.py      # NX session wrapper (singleton)
+  response.py        # ToolResult / ToolError response types
+  tools/
+    registry.py      # @mcp_tool decorator and ToolRegistry
+    file_ops.py      # File operations (8 tools)
+    sketch.py        # Sketch tools (7 tools)
+    modeling.py      # Modeling features (11 tools)
+    feature_tree.py  # Feature queries (3 tools)
+    assembly.py      # Assembly tools (4 tools)
+    drawing.py       # Drawing tools (5 tools)
+    measure.py       # Measurement tools (3 tools)
+    utility.py       # View, undo, screenshot, journal (7 tools)
+  utils/
+    geometry.py      # Point3d, Vector3d, object resolution helpers
+    selection.py     # ScCollector creation helpers
+tests/
+  test_tools/        # Per-module test suites (120 tests, all mocked)
 ```
 
 ## License

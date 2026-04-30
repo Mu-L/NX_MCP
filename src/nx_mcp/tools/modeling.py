@@ -3,14 +3,11 @@ boolean, delete/edit feature, mirror body."""
 
 from __future__ import annotations
 
-import logging
 from typing import Any
 
 from nx_mcp.nx_session import NXSession
 from nx_mcp.response import ToolError, ToolResult
 from nx_mcp.tools.registry import mcp_tool
-
-logger = logging.getLogger("nx_mcp")
 
 
 # ---------------------------------------------------------------------------
@@ -37,7 +34,7 @@ def _direction_vector(direction: str):
     return table[key]
 
 
-def _boolean_option(work_part, boolean: str):
+def _boolean_option(boolean: str):
     """Map a boolean string to NXOpen.Feature.BooleanType or None."""
     import NXOpen
 
@@ -80,12 +77,9 @@ async def nx_extrude(
 
         work_part = NXSession.get_instance().require_work_part()
 
-        # Resolve section / sketch
-        sections = work_part.Sections
-        section = sections.CreateSection(0.001, 0.001, 0.001)
-
+        # Resolve sketch if name provided
+        sketch = None
         if sketch_name:
-            sketch = None
             for sk in work_part.Sketches.ToArray():
                 if sk.Name == sketch_name or sk.Name.endswith(sketch_name):
                     sketch = sk
@@ -98,14 +92,14 @@ async def nx_extrude(
                 )
 
         dir_vec = _direction_vector(direction)
-        bool_type = _boolean_option(work_part, boolean)
+        bool_type = _boolean_option(boolean)
 
         builder = work_part.Features.CreateExtrudeBuilder(None)
         builder.SetDistance(NXOpen.Expression.ValueType.Double, distance, NXOpen.Unit.CollectionType.Millimeter)
         builder.SetDirection(dir_vec)
         if bool_type is not None:
             builder.SetBooleanOperation(bool_type)
-        if sketch_name:
+        if sketch is not None:
             builder.SetSketch(sketch)
 
         feature = builder.Commit()
@@ -145,8 +139,9 @@ async def nx_revolve(
 
         work_part = NXSession.get_instance().require_work_part()
 
+        # Resolve sketch if name provided
+        sketch = None
         if sketch_name:
-            sketch = None
             for sk in work_part.Sketches.ToArray():
                 if sk.Name == sketch_name or sk.Name.endswith(sketch_name):
                     sketch = sk
@@ -159,14 +154,14 @@ async def nx_revolve(
                 )
 
         axis_vec = _direction_vector(axis)
-        bool_type = _boolean_option(work_part, boolean)
+        bool_type = _boolean_option(boolean)
 
         builder = work_part.Features.CreateRevolveBuilder(None)
         builder.SetAngle(NXOpen.Expression.ValueType.Double, angle, NXOpen.Unit.CollectionType.Degree)
         builder.SetAxis(axis_vec)
         if bool_type is not None:
             builder.SetBooleanOperation(bool_type)
-        if sketch_name:
+        if sketch is not None:
             builder.SetSketch(sketch)
 
         feature = builder.Commit()
@@ -200,12 +195,35 @@ async def nx_sweep(
     boolean: str = "none",
 ) -> ToolResult | ToolError:
     try:
+        from nx_mcp.utils.geometry import resolve_object_by_name
+
         work_part = NXSession.get_instance().require_work_part()
-        bool_type = _boolean_option(work_part, boolean)
+
+        section_obj = resolve_object_by_name(
+            work_part, section, work_part.Sketches, work_part.Curves
+        )
+        if section_obj is None:
+            return ToolError(
+                error_code="NX_NOT_FOUND",
+                message=f"Section '{section}' not found.",
+                suggestion="Use nx_list_sketches to see available sketches.",
+            )
+
+        guide_obj = resolve_object_by_name(
+            work_part, guide, work_part.Sketches, work_part.Curves
+        )
+        if guide_obj is None:
+            return ToolError(
+                error_code="NX_NOT_FOUND",
+                message=f"Guide '{guide}' not found.",
+                suggestion="Use nx_list_sketches to see available sketches.",
+            )
+
+        bool_type = _boolean_option(boolean)
 
         builder = work_part.Features.CreateSweepBuilder(None)
-        builder.SetSection(section)
-        builder.SetGuide(guide)
+        builder.SetSection(section_obj)
+        builder.SetGuide(guide_obj)
         if bool_type is not None:
             builder.SetBooleanOperation(bool_type)
 

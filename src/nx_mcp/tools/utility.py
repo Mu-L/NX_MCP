@@ -32,25 +32,20 @@ _ORIENTATION_MAP: dict[str, str] = {
     description="Fit all visible objects in the graphics viewport.",
     params={},
 )
-async def nx_fit_view() -> str:
+async def nx_fit_view() -> ToolResult | ToolError:
     """Fit the view so that all objects are visible."""
     try:
-        session = NXSession.get_instance().require()
+        work_part = NXSession.get_instance().require_work_part()
 
-        view = session.Parts.Display.ViewsOfWorkPart
-        if view is not None:
-            view.FitAll()
-        else:
-            # Fallback: use full-screen fit on the current display
-            session.Views.FullScreen()
+        work_part.ModelingViews.WorkView.Fit()
 
         return ToolResult.success(
             data={},
             message="View fitted — all objects visible.",
-        ).to_text()
+        )
 
     except Exception as exc:
-        return ToolResult.from_exception(exc).to_text()
+        return ToolResult.from_exception(exc)
 
 
 # ---------------------------------------------------------------------------
@@ -67,12 +62,12 @@ async def nx_fit_view() -> str:
         },
     },
 )
-async def nx_set_view(orientation: str) -> str:
+async def nx_set_view(orientation: str) -> ToolResult | ToolError:
     """Set the view to a named orientation."""
     try:
         import NXOpen
 
-        session = NXSession.get_instance().require()
+        work_part = NXSession.get_instance().require_work_part()
 
         key = orientation.strip().lower()
         if key not in _ORIENTATION_MAP:
@@ -81,24 +76,18 @@ async def nx_set_view(orientation: str) -> str:
                 error_code="NX_INVALID_PARAMS",
                 message=f"Invalid orientation '{orientation}'.",
                 suggestion=f"Use one of: {valid}.",
-            ).to_text()
-
-        # Retrieve the current view and orient it
-        view = session.Parts.Display.ViewsOfWorkPart
-        if view is not None:
-            nx_orient = getattr(
-                NXOpen.View.ViewOrientation,
-                _ORIENTATION_MAP[key],
             )
-            view.Orient(nx_orient)
+
+        nx_orient = getattr(NXOpen.View.ViewOrientation, _ORIENTATION_MAP[key])
+        work_part.ModelingViews.WorkView.Orient(nx_orient)
 
         return ToolResult.success(
             data={"orientation": key},
             message=f"View set to {key}.",
-        ).to_text()
+        )
 
     except Exception as exc:
-        return ToolResult.from_exception(exc).to_text()
+        return ToolResult.from_exception(exc)
 
 
 # ---------------------------------------------------------------------------
@@ -109,7 +98,7 @@ async def nx_set_view(orientation: str) -> str:
     description="Undo the last visible operation.",
     params={},
 )
-async def nx_undo() -> str:
+async def nx_undo() -> ToolResult | ToolError:
     """Undo the last visible mark."""
     try:
         session = NXSession.get_instance().require()
@@ -119,10 +108,10 @@ async def nx_undo() -> str:
         return ToolResult.success(
             data={},
             message="Undo successful.",
-        ).to_text()
+        )
 
     except Exception as exc:
-        return ToolResult.from_exception(exc).to_text()
+        return ToolResult.from_exception(exc)
 
 
 # ---------------------------------------------------------------------------
@@ -139,29 +128,24 @@ async def nx_undo() -> str:
         },
     },
 )
-async def nx_screenshot(path: str) -> str:
+async def nx_screenshot(path: str) -> ToolResult | ToolError:
     """Export the viewport as a PNG screenshot."""
     try:
-        import NXOpen
+        import NXOpen.UF
 
-        session = NXSession.get_instance().require()
-
-        imaging = NXOpen.Display.Imaging()
-        # Grab the current display
-        display_part = session.Parts.Display
-
-        screenshot_builder = imaging.CreateImageExportBuilder()
-        screenshot_builder.FileName = path
-        screenshot_builder.FileFormat = NXOpen.Display.ImageExportBuilder.FileFormats.Png
-        screenshot_builder.Apply()
+        uf_session = NXOpen.UF.UFSession.GetUFSession()
+        image_builder = uf_session.Disp.CreateImageExportBuilder()
+        image_builder.FileName = path
+        image_builder.FileFormat = NXOpen.UF.ImageExportBuilder.FileFormatType.Png
+        image_builder.Commit()
 
         return ToolResult.success(
             data={"path": path},
             message=f"Screenshot saved to {path}.",
-        ).to_text()
+        )
 
     except Exception as exc:
-        return ToolResult.from_exception(exc).to_text()
+        return ToolResult.from_exception(exc)
 
 
 # ---------------------------------------------------------------------------
@@ -178,7 +162,7 @@ async def nx_screenshot(path: str) -> str:
         },
     },
 )
-async def nx_run_journal(path: str) -> str:
+async def nx_run_journal(path: str) -> ToolResult | ToolError:
     """Run an NX journal file."""
     try:
         if not os.path.isfile(path):
@@ -186,7 +170,15 @@ async def nx_run_journal(path: str) -> str:
                 error_code="NX_NOT_FOUND",
                 message=f"Journal file not found: {path}",
                 suggestion="Provide a valid file path to an existing .py journal script.",
-            ).to_text()
+            )
+
+        ext = os.path.splitext(path)[1].lower()
+        if ext != ".py":
+            return ToolError(
+                error_code="NX_INVALID_PARAMS",
+                message=f"Journal file must be a .py file, got '{ext}'.",
+                suggestion="Provide a path ending in .py.",
+            )
 
         session = NXSession.get_instance().require()
 
@@ -195,10 +187,10 @@ async def nx_run_journal(path: str) -> str:
         return ToolResult.success(
             data={"path": path},
             message=f"Journal executed: {path}",
-        ).to_text()
+        )
 
     except Exception as exc:
-        return ToolResult.from_exception(exc).to_text()
+        return ToolResult.from_exception(exc)
 
 
 # ---------------------------------------------------------------------------
@@ -209,7 +201,7 @@ async def nx_run_journal(path: str) -> str:
     description="Start recording an NX journal.",
     params={},
 )
-async def nx_record_start() -> str:
+async def nx_record_start() -> ToolResult | ToolError:
     """Begin journal recording."""
     try:
         session = NXSession.get_instance().require()
@@ -219,10 +211,10 @@ async def nx_record_start() -> str:
         return ToolResult.success(
             data={},
             message="Journal recording started.",
-        ).to_text()
+        )
 
     except Exception as exc:
-        return ToolResult.from_exception(exc).to_text()
+        return ToolResult.from_exception(exc)
 
 
 # ---------------------------------------------------------------------------
@@ -239,7 +231,7 @@ async def nx_record_start() -> str:
         },
     },
 )
-async def nx_record_stop(save_path: str | None = None) -> str:
+async def nx_record_stop(save_path: str | None = None) -> ToolResult | ToolError:
     """Stop journal recording."""
     try:
         session = NXSession.get_instance().require()
@@ -253,7 +245,7 @@ async def nx_record_stop(save_path: str | None = None) -> str:
         return ToolResult.success(
             data=data,
             message="Journal recording stopped.",
-        ).to_text()
+        )
 
     except Exception as exc:
-        return ToolResult.from_exception(exc).to_text()
+        return ToolResult.from_exception(exc)

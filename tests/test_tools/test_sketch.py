@@ -25,10 +25,16 @@ def _make_mock_nxopen():
     mock_work_part = MagicMock()
     mock_work_part.Name = "test_part"
     mock_session.Parts.Work = mock_work_part
-    mock_session.ActiveSketch = MagicMock()
     nxopen.Session = MagicMock()
     nxopen.Session.GetSession = MagicMock(return_value=mock_session)
     nxopen._mock_session = mock_session
+
+    # --- Active sketch on work part ---
+    mock_active_sketch = MagicMock()
+    mock_active_sketch.Deactivate = MagicMock()
+    mock_active_sketch.CreateGeometricConstraint = MagicMock()
+    mock_active_sketch.CreateDimension = MagicMock()
+    mock_work_part.Sketches.ActiveSketch = mock_active_sketch
 
     # --- Point3d / Vector3d ---
     nxopen.Point3d = MagicMock(return_value=MagicMock())
@@ -105,6 +111,27 @@ def _make_mock_nxopen():
 
     # --- UF ---
     uf = types.ModuleType("NXOpen.UF")
+
+    # --- Sketch enums ---
+    sketch_mod = types.ModuleType("NXOpen.Sketch")
+    sketch_mod.ViewOrientation = MagicMock()
+    sketch_mod.ViewOrientation.TrueValue = "TrueValue"
+    sketch_mod.CloseLevel = MagicMock()
+    sketch_mod.CloseLevel.FalseValue = "FalseValue"
+    sketch_mod.GeometricConstraintType = MagicMock()
+    sketch_mod.GeometricConstraintType.Horizontal = "Horizontal"
+    sketch_mod.GeometricConstraintType.Vertical = "Vertical"
+    sketch_mod.GeometricConstraintType.Parallel = "Parallel"
+    sketch_mod.GeometricConstraintType.Perpendicular = "Perpendicular"
+    sketch_mod.GeometricConstraintType.Tangent = "Tangent"
+    sketch_mod.GeometricConstraintType.EqualLength = "EqualLength"
+    sketch_mod.GeometricConstraintType.Fixed = "Fixed"
+    sketch_mod.GeometricConstraintType.Coincident = "Coincident"
+    sketch_mod.GeometricConstraintType.Midpoint = "Midpoint"
+    sketch_mod.GeometricConstraintType.Concentric = "Concentric"
+    sketch_mod.ConstraintType = MagicMock()
+    sketch_mod.ConstraintType.HorizontalDimension = "HorizontalDimension"
+    nxopen.Sketch = sketch_mod
     uf.UFSession = MagicMock()
     uf.UFSession.GetUFSession = MagicMock(return_value=MagicMock())
     nxopen.UF = uf
@@ -273,7 +300,7 @@ class TestSketchConstraint:
         assert parsed["status"] == "success"
         assert parsed["data"]["constraint_type"] == "horizontal"
         assert parsed["data"]["targets"] == ["Line1", "Line2"]
-        work_part.Sketches.CreateConstraintBuilder.assert_called_once()
+        work_part.Sketches.ActiveSketch.CreateGeometricConstraint.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_constraint_with_value(self, _setup_nx):
@@ -289,9 +316,7 @@ class TestSketchConstraint:
 
         assert parsed["status"] == "success"
         assert parsed["data"]["value"] == 25.0
-        builders = nxopen._created_constraint_builders
-        assert len(builders) == 1
-        builders[0].SetValue.assert_called_once_with(25.0)
+        work_part.Sketches.ActiveSketch.CreateDimension.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_constraint_invalid_type(self, _setup_nx):
@@ -322,13 +347,13 @@ class TestFinishSketch:
 
         assert parsed["status"] == "success"
         assert "finished" in parsed["message"].lower()
-        nxopen._mock_session.ActiveSketch.Exit.assert_called_once()
+        work_part.Sketches.ActiveSketch.Deactivate.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_finish_sketch_no_active_sketch(self, _setup_nx):
         nxopen, work_part = _setup_nx
         # Simulate no active sketch
-        nxopen._mock_session.ActiveSketch = None
+        work_part.Sketches.ActiveSketch = None
 
         handler = ToolRegistry.get_handler("nx_finish_sketch")
         result = await handler()

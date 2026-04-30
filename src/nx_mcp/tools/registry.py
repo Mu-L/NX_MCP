@@ -12,7 +12,7 @@ class _ToolDef:
         self,
         name: str,
         description: str,
-        params: dict[str, dict[str, str]],
+        params: dict[str, dict[str, Any]],
         handler: Callable[..., Coroutine],
     ) -> None:
         self.name = name
@@ -76,7 +76,7 @@ class ToolRegistry:
 def mcp_tool(
     name: str,
     description: str,
-    params: dict[str, dict[str, str]],
+    params: dict[str, dict[str, Any]],
 ) -> Callable:
     """Decorator to register an async function as an MCP tool."""
 

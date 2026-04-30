@@ -13,3 +13,9 @@ venv/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
+.ruff/
+*.egg-info
+*.whl
+.tox/
+.coverage
+htmlcov/

@@ -2,13 +2,9 @@
 
 from __future__ import annotations
 
-import logging
-
 from nx_mcp.nx_session import NXSession
 from nx_mcp.response import ToolError, ToolResult
 from nx_mcp.tools.registry import mcp_tool
-
-logger = logging.getLogger("nx_mcp")
 
 
 # ---------------------------------------------------------------------------
@@ -31,33 +27,50 @@ logger = logging.getLogger("nx_mcp")
         },
     },
 )
-async def nx_measure_distance(obj1: str, obj2: str) -> str:
+async def nx_measure_distance(obj1: str, obj2: str) -> ToolResult | ToolError:
     """Measure the distance between two objects."""
     try:
+        from nx_mcp.utils.geometry import resolve_object_by_name
+
         work_part = NXSession.get_instance().require_work_part()
 
-        measure_manager = work_part.MeasureManager
-
-        # Create a distance measurement between the two named objects
-        distance_measure = measure_manager.NewDistance(
-            work_part.ModelingViews.WorkView,
-            obj1,
-            obj2,
+        nx_obj1 = resolve_object_by_name(
+            work_part, obj1, work_part.Features, work_part.Bodies, work_part.Curves
         )
+        if nx_obj1 is None:
+            return ToolError(
+                error_code="NX_NOT_FOUND",
+                message=f"Object '{obj1}' not found.",
+                suggestion="Check the object name and try again.",
+            )
 
-        distance_value = distance_measure.Value
+        nx_obj2 = resolve_object_by_name(
+            work_part, obj2, work_part.Features, work_part.Bodies, work_part.Curves
+        )
+        if nx_obj2 is None:
+            return ToolError(
+                error_code="NX_NOT_FOUND",
+                message=f"Object '{obj2}' not found.",
+                suggestion="Check the object name and try again.",
+            )
+
+        distance_measure = work_part.MeasureManager.NewDistance(
+            work_part.ModelingViews.WorkView,
+            nx_obj1,
+            nx_obj2,
+        )
 
         return ToolResult.success(
             data={
                 "obj1": obj1,
                 "obj2": obj2,
-                "distance_mm": distance_value,
+                "distance_mm": distance_measure.Value,
             },
-            message=f"Distance between '{obj1}' and '{obj2}': {distance_value} mm",
-        ).to_text()
+            message=f"Distance between '{obj1}' and '{obj2}': {distance_measure.Value} mm",
+        )
 
     except Exception as exc:
-        return ToolResult.from_exception(exc).to_text()
+        return ToolResult.from_exception(exc)
 
 
 # ---------------------------------------------------------------------------
@@ -80,33 +93,50 @@ async def nx_measure_distance(obj1: str, obj2: str) -> str:
         },
     },
 )
-async def nx_measure_angle(obj1: str, obj2: str) -> str:
+async def nx_measure_angle(obj1: str, obj2: str) -> ToolResult | ToolError:
     """Measure the angle between two objects."""
     try:
+        from nx_mcp.utils.geometry import resolve_object_by_name
+
         work_part = NXSession.get_instance().require_work_part()
 
-        measure_manager = work_part.MeasureManager
-
-        # Create an angle measurement between the two named objects
-        angle_measure = measure_manager.NewAngle(
-            work_part.ModelingViews.WorkView,
-            obj1,
-            obj2,
+        nx_obj1 = resolve_object_by_name(
+            work_part, obj1, work_part.Features, work_part.Bodies, work_part.Curves
         )
+        if nx_obj1 is None:
+            return ToolError(
+                error_code="NX_NOT_FOUND",
+                message=f"Object '{obj1}' not found.",
+                suggestion="Check the object name and try again.",
+            )
 
-        angle_value = angle_measure.Value
+        nx_obj2 = resolve_object_by_name(
+            work_part, obj2, work_part.Features, work_part.Bodies, work_part.Curves
+        )
+        if nx_obj2 is None:
+            return ToolError(
+                error_code="NX_NOT_FOUND",
+                message=f"Object '{obj2}' not found.",
+                suggestion="Check the object name and try again.",
+            )
+
+        angle_measure = work_part.MeasureManager.NewAngle(
+            work_part.ModelingViews.WorkView,
+            nx_obj1,
+            nx_obj2,
+        )
 
         return ToolResult.success(
             data={
                 "obj1": obj1,
                 "obj2": obj2,
-                "angle_deg": angle_value,
+                "angle_deg": angle_measure.Value,
             },
-            message=f"Angle between '{obj1}' and '{obj2}': {angle_value} degrees",
-        ).to_text()
+            message=f"Angle between '{obj1}' and '{obj2}': {angle_measure.Value} degrees",
+        )
 
     except Exception as exc:
-        return ToolResult.from_exception(exc).to_text()
+        return ToolResult.from_exception(exc)
 
 
 # ---------------------------------------------------------------------------
@@ -124,7 +154,7 @@ async def nx_measure_angle(obj1: str, obj2: str) -> str:
         },
     },
 )
-async def nx_measure_volume(body: str | None = None) -> str:
+async def nx_measure_volume(body: str | None = None) -> ToolResult | ToolError:
     """Measure the volume of a body or all bodies."""
     try:
         work_part = NXSession.get_instance().require_work_part()
@@ -136,11 +166,10 @@ async def nx_measure_volume(body: str | None = None) -> str:
                 error_code="NX_NOT_FOUND",
                 message="No bodies found in the work part.",
                 suggestion="Create a solid body first, e.g. via nx_extrude.",
-            ).to_text()
+            )
 
         target_bodies = bodies
         if body is not None:
-            # Find the named body
             found = None
             available: list[str] = []
             for b in bodies:
@@ -154,11 +183,10 @@ async def nx_measure_volume(body: str | None = None) -> str:
                     error_code="NX_NOT_FOUND",
                     message=f"Body '{body}' not found.",
                     suggestion=f"Available bodies: {', '.join(available[:30])}",
-                ).to_text()
+                )
 
             target_bodies = [found]
 
-        # Compute volumes
         results: list[dict] = []
         total_volume_mm3 = 0.0
 
@@ -182,7 +210,7 @@ async def nx_measure_volume(body: str | None = None) -> str:
             f"Measured volume of {len(results)} body(ies): "
             f"{total_volume_mm3:.4f} mm3 / {total_volume_mm3 / 1000.0:.4f} cm3"
         )
-        return ToolResult.success(data=data, message=msg).to_text()
+        return ToolResult.success(data=data, message=msg)
 
     except Exception as exc:
-        return ToolResult.from_exception(exc).to_text()
+        return ToolResult.from_exception(exc)

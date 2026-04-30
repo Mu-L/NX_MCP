@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from nx_mcp.nx_session import NXSession
 from nx_mcp.response import ToolError, ToolResult
 from nx_mcp.tools.registry import mcp_tool
@@ -26,7 +28,7 @@ from nx_mcp.tools.registry import mcp_tool
         },
     },
 )
-async def nx_create_part(path: str, units: str = "mm") -> str:
+async def nx_create_part(path: str, units: str = "mm") -> ToolResult | ToolError:
     """Create a new NX part file."""
     try:
         import NXOpen
@@ -53,10 +55,10 @@ async def nx_create_part(path: str, units: str = "mm") -> str:
         return ToolResult.success(
             data={"path": part.FullPath, "name": part.Name},
             message=f"Created new part: {part.Name}",
-        ).to_text()
+        )
 
     except Exception as exc:
-        return ToolResult.from_exception(exc).to_text()
+        return ToolResult.from_exception(exc)
 
 
 # ---------------------------------------------------------------------------
@@ -73,23 +75,23 @@ async def nx_create_part(path: str, units: str = "mm") -> str:
         },
     },
 )
-async def nx_open_part(path: str) -> str:
+async def nx_open_part(path: str) -> ToolResult | ToolError:
     """Open an existing NX part file."""
     try:
         import NXOpen
 
         session = NXSession.get_instance().require()
 
-        base_part, _load_status = session.Parts.OpenBaseDisplay(path)
+        _base_part, _load_status = session.Parts.OpenBaseDisplay(path)
         part = session.Parts.Display
 
         return ToolResult.success(
             data={"path": part.FullPath, "name": part.Name},
             message=f"Opened part: {part.Name}",
-        ).to_text()
+        )
 
     except Exception as exc:
-        return ToolResult.from_exception(exc).to_text()
+        return ToolResult.from_exception(exc)
 
 
 # ---------------------------------------------------------------------------
@@ -100,12 +102,11 @@ async def nx_open_part(path: str) -> str:
     description="Save the currently active (work) part.",
     params={},
 )
-async def nx_save_part() -> str:
+async def nx_save_part() -> ToolResult | ToolError:
     """Save the current work part."""
     try:
         import NXOpen
 
-        session = NXSession.get_instance().require()
         part = NXSession.get_instance().require_work_part()
 
         part.Save(NXOpen.BasePart.SaveComponents.TrueValue, NXOpen.BasePart.CloseAfterSave.FalseValue)
@@ -113,10 +114,10 @@ async def nx_save_part() -> str:
         return ToolResult.success(
             data={"path": part.FullPath, "name": part.Name},
             message=f"Saved part: {part.Name}",
-        ).to_text()
+        )
 
     except Exception as exc:
-        return ToolResult.from_exception(exc).to_text()
+        return ToolResult.from_exception(exc)
 
 
 # ---------------------------------------------------------------------------
@@ -133,12 +134,9 @@ async def nx_save_part() -> str:
         },
     },
 )
-async def nx_save_as(path: str) -> str:
+async def nx_save_as(path: str) -> ToolResult | ToolError:
     """Save the current work part to a new file."""
     try:
-        import NXOpen
-
-        session = NXSession.get_instance().require()
         part = NXSession.get_instance().require_work_part()
 
         part.SaveAs(path)
@@ -146,10 +144,10 @@ async def nx_save_as(path: str) -> str:
         return ToolResult.success(
             data={"path": part.FullPath, "name": part.Name},
             message=f"Saved part as: {path}",
-        ).to_text()
+        )
 
     except Exception as exc:
-        return ToolResult.from_exception(exc).to_text()
+        return ToolResult.from_exception(exc)
 
 
 # ---------------------------------------------------------------------------
@@ -166,7 +164,7 @@ async def nx_save_as(path: str) -> str:
         },
     },
 )
-async def nx_close_part(save: bool = True) -> str:
+async def nx_close_part(save: bool = True) -> ToolResult | ToolError:
     """Close the current work part."""
     try:
         import NXOpen
@@ -180,17 +178,15 @@ async def nx_close_part(save: bool = True) -> str:
         if save:
             part.Save(NXOpen.BasePart.SaveComponents.TrueValue, NXOpen.BasePart.CloseAfterSave.FalseValue)
 
-        base_part = session.Parts.Display
-        if base_part is not None:
-            session.Parts.CloseAll(NXOpen.BasePart.CloseModified.CloseModified, None)
+        session.Parts.CloseDisplay(part, NXOpen.BasePart.CloseModified.CloseModified, None)
 
         return ToolResult.success(
             data={"path": part_path, "name": part_name},
             message=f"Closed part: {part_name} (saved={save})",
-        ).to_text()
+        )
 
     except Exception as exc:
-        return ToolResult.from_exception(exc).to_text()
+        return ToolResult.from_exception(exc)
 
 
 # ---------------------------------------------------------------------------
@@ -220,7 +216,7 @@ _EXPORT_FORMATS = {
         },
     },
 )
-async def nx_export_step(path: str, format: str = "step") -> str:  # noqa: A002
+async def nx_export_step(path: str, format: str = "step") -> ToolResult | ToolError:  # noqa: A002
     """Export the current work part to a CAD interchange format."""
     try:
         import NXOpen
@@ -232,10 +228,10 @@ async def nx_export_step(path: str, format: str = "step") -> str:  # noqa: A002
                 error_code="NX_INVALID_PARAMS",
                 message=f"Unsupported export format: '{format}'.",
                 suggestion=f"Use one of: {valid}.",
-            ).to_text()
+            )
 
         session = NXSession.get_instance().require()
-        part = NXSession.get_instance().require_work_part()
+        NXSession.get_instance().require_work_part()
 
         # Use the appropriate NX Open exporter based on format
         if fmt_key == "step":
@@ -259,10 +255,10 @@ async def nx_export_step(path: str, format: str = "step") -> str:  # noqa: A002
         return ToolResult.success(
             data={"path": path, "format": fmt_key, "description": info["description"]},
             message=f"Exported part to {info['description']} at: {path}",
-        ).to_text()
+        )
 
     except Exception as exc:
-        return ToolResult.from_exception(exc).to_text()
+        return ToolResult.from_exception(exc)
 
 
 # ---------------------------------------------------------------------------
@@ -282,11 +278,10 @@ _IMPORT_EXTENSIONS = {".stp", ".step", ".igs", ".iges", ".x_t", ".x_b"}
         },
     },
 )
-async def nx_import_geometry(path: str) -> str:
+async def nx_import_geometry(path: str) -> ToolResult | ToolError:
     """Import geometry from an external CAD file into the current work part."""
     try:
         import NXOpen
-        import os
 
         ext = os.path.splitext(path)[1].lower()
         if ext not in _IMPORT_EXTENSIONS:
@@ -295,7 +290,7 @@ async def nx_import_geometry(path: str) -> str:
                 error_code="NX_INVALID_PARAMS",
                 message=f"Unsupported import file extension: '{ext}'.",
                 suggestion=f"Use one of: {valid}.",
-            ).to_text()
+            )
 
         session = NXSession.get_instance().require()
         NXSession.get_instance().require_work_part()
@@ -316,10 +311,10 @@ async def nx_import_geometry(path: str) -> str:
         return ToolResult.success(
             data={"path": path, "extension": ext},
             message=f"Imported geometry from: {path}",
-        ).to_text()
+        )
 
     except Exception as exc:
-        return ToolResult.from_exception(exc).to_text()
+        return ToolResult.from_exception(exc)
 
 
 # ---------------------------------------------------------------------------
@@ -330,7 +325,7 @@ async def nx_import_geometry(path: str) -> str:
     description="List all currently open parts in the NX session.",
     params={},
 )
-async def nx_list_open_parts() -> str:
+async def nx_list_open_parts() -> ToolResult | ToolError:
     """List all currently open parts."""
     try:
         import NXOpen
@@ -338,22 +333,19 @@ async def nx_list_open_parts() -> str:
         session = NXSession.get_instance().require()
 
         parts_array = session.Parts.ToArray()
+        work_name = session.Parts.Work.Name if session.Parts.Work is not None else None
         parts_list = []
         for p in parts_array:
             parts_list.append({
                 "name": p.Name,
                 "path": p.FullPath,
-                "is_work": (
-                    p.Name == session.Parts.Work.Name
-                    if session.Parts.Work is not None
-                    else False
-                ),
+                "is_work": p.Name == work_name if work_name is not None else False,
             })
 
         return ToolResult.success(
             data={"parts": parts_list, "count": len(parts_list)},
             message=f"Open parts: {len(parts_list)}",
-        ).to_text()
+        )
 
     except Exception as exc:
-        return ToolResult.from_exception(exc).to_text()
+        return ToolResult.from_exception(exc)

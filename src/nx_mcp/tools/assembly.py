@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-import logging
 from typing import Any
 
 from nx_mcp.nx_session import NXSession
 from nx_mcp.response import ToolError, ToolResult
 from nx_mcp.tools.registry import mcp_tool
-
-logger = logging.getLogger("nx_mcp")
 
 # ---------------------------------------------------------------------------
 # Mate type mapping
@@ -45,12 +42,11 @@ _MATE_TYPES = {
 async def nx_add_component(
     part_path: str,
     name: str | None = None,
-) -> str:
+) -> ToolResult | ToolError:
     """Add a component from a .prt file into the current assembly."""
     try:
         work_part = NXSession.get_instance().require_work_part()
 
-        # Use ComponentAssembly to add the component
         comp_assembly = work_part.ComponentAssembly
         component = comp_assembly.AddComponent(part_path, name or "")
 
@@ -59,10 +55,10 @@ async def nx_add_component(
         return ToolResult.success(
             data={"component": comp_name, "part_path": part_path},
             message=f"Added component '{comp_name}' from {part_path}.",
-        ).to_text()
+        )
 
     except Exception as exc:
-        return ToolResult.from_exception(exc).to_text()
+        return ToolResult.from_exception(exc)
 
 
 # ---------------------------------------------------------------------------
@@ -99,7 +95,7 @@ async def nx_mate_component(
     mate_type: str,
     references: list[str] | None = None,
     offset: float = 0.0,
-) -> str:
+) -> ToolResult | ToolError:
     """Apply a mating constraint between assembly components."""
     try:
         import NXOpen
@@ -113,27 +109,37 @@ async def nx_mate_component(
                 error_code="NX_INVALID_PARAMS",
                 message=f"Unsupported mate type: '{mate_type}'.",
                 suggestion=f"Use one of: {valid}.",
-            ).to_text()
+            )
 
-        # Access mating constraints through the assembly
         comp_assembly = work_part.ComponentAssembly
+        constraints_builder = comp_assembly.CreateConstraintsBuilder()
 
-        # Create a mating constraint builder
-        mate_builder = comp_assembly.CreateMatingConstraintBuilder()
-        mate_builder.SetMateType(_MATE_TYPES[mate_key])
-        mate_builder.SetComponent(component)
-        mate_builder.SetOffset(offset)
+        type_map = {
+            "touch": NXOpen.Assemblies.Constraint.Type.Touch,
+            "align": NXOpen.Assemblies.Constraint.Type.Align,
+            "orient": NXOpen.Assemblies.Constraint.Type.Orient,
+            "center": NXOpen.Assemblies.Constraint.Type.Center,
+            "align_angle": NXOpen.Assemblies.Constraint.Type.Angular,
+        }
+        constraint_type = type_map[mate_key]
+
+        constraint = constraints_builder.CreateConstraint(constraint_type)
+        constraint.Component = component
+
+        if offset != 0.0:
+            constraint.Offset = offset
 
         if references:
-            for ref in references:
-                mate_builder.AddReference(ref)
+            for i, ref in enumerate(references):
+                if i == 0:
+                    constraint.FirstConstraintReference = ref
+                elif i == 1:
+                    constraint.SecondConstraintReference = ref
 
-        constraint = mate_builder.Commit()
-        constraint_name = constraint.Name if constraint else f"{mate_type}_mate"
-        mate_builder.Destroy()
+        constraints_builder.Commit()
+        constraints_builder.Destroy()
 
         result_data: dict[str, Any] = {
-            "constraint": constraint_name,
             "component": component,
             "mate_type": mate_type,
             "offset": offset,
@@ -144,10 +150,10 @@ async def nx_mate_component(
         return ToolResult.success(
             data=result_data,
             message=f"Applied '{mate_type}' mate to component '{component}'.",
-        ).to_text()
+        )
 
     except Exception as exc:
-        return ToolResult.from_exception(exc).to_text()
+        return ToolResult.from_exception(exc)
 
 
 # ---------------------------------------------------------------------------
@@ -158,7 +164,7 @@ async def nx_mate_component(
     description="List all components in the current assembly.",
     params={},
 )
-async def nx_list_components() -> str:
+async def nx_list_components() -> ToolResult | ToolError:
     """List all components in the current work part's assembly."""
     try:
         work_part = NXSession.get_instance().require_work_part()
@@ -178,10 +184,10 @@ async def nx_list_components() -> str:
         return ToolResult.success(
             data={"components": components_list, "count": len(components_list)},
             message=f"Assembly contains {len(components_list)} component(s).",
-        ).to_text()
+        )
 
     except Exception as exc:
-        return ToolResult.from_exception(exc).to_text()
+        return ToolResult.from_exception(exc)
 
 
 # ---------------------------------------------------------------------------
@@ -236,16 +242,16 @@ async def nx_reposition_component(
     rx: float = 0.0,
     ry: float = 0.0,
     rz: float = 0.0,
-) -> str:
+) -> ToolResult | ToolError:
     """Reposition a component by translation and rotation offsets."""
     try:
+        import math
+
         import NXOpen
 
         work_part = NXSession.get_instance().require_work_part()
 
         comp_assembly = work_part.ComponentAssembly
-
-        # Find the component by name
         root_component = comp_assembly.RootComponent
         target = None
         if root_component is not None:
@@ -260,15 +266,28 @@ async def nx_reposition_component(
                 error_code="NX_NOT_FOUND",
                 message=f"Component '{component}' not found in assembly.",
                 suggestion="Use nx_list_components to see available components.",
-            ).to_text()
+            )
 
-        # Apply repositioning via MoveComponent builder
-        move_builder = comp_assembly.CreateMoveComponentBuilder()
-        move_builder.SetComponent(target)
-        move_builder.SetTranslation(dx, dy, dz)
-        move_builder.SetRotation(rx, ry, rz)
-        move_builder.Commit()
-        move_builder.Destroy()
+        transform = NXOpen.Transform()
+        transform.Translation = NXOpen.Vector3d(dx, dy, dz)
+
+        cx, sx = math.cos(math.radians(rx)), math.sin(math.radians(rx))
+        cy, sy = math.cos(math.radians(ry)), math.sin(math.radians(ry))
+        cz, sz = math.cos(math.radians(rz)), math.sin(math.radians(rz))
+
+        rot = NXOpen.Matrix3x3()
+        rot.Xx = cy * cz
+        rot.Xy = sx * sy * cz - cx * sz
+        rot.Xz = cx * sy * cz + sx * sz
+        rot.Yx = cy * sz
+        rot.Yy = sx * sy * sz + cx * cz
+        rot.Yz = cx * sy * sz - sx * cz
+        rot.Zx = -sy
+        rot.Zy = sx * cy
+        rot.Zz = cx * cy
+        transform.Rotation = rot
+
+        comp_assembly.MoveComponent(target, transform)
 
         return ToolResult.success(
             data={
@@ -278,7 +297,7 @@ async def nx_reposition_component(
             },
             message=f"Repositioned component '{component}' "
                     f"(dx={dx}, dy={dy}, dz={dz}, rx={rx}, ry={ry}, rz={rz}).",
-        ).to_text()
+        )
 
     except Exception as exc:
-        return ToolResult.from_exception(exc).to_text()
+        return ToolResult.from_exception(exc)

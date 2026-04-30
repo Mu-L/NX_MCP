@@ -14,7 +14,7 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
-from nx_mcp.response import ToolError
+from nx_mcp.response import ToolError, ToolResult
 from nx_mcp.tools.registry import ToolRegistry
 
 logger = logging.getLogger("nx_mcp")
@@ -76,6 +76,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         result = await handler(**arguments)
         if isinstance(result, str):
             text = result
+        elif isinstance(result, (ToolResult, ToolError)):
+            text = result.to_text()
         elif isinstance(result, dict):
             text = json.dumps(result, indent=2, ensure_ascii=False)
         else:

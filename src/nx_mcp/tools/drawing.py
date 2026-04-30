@@ -56,7 +56,7 @@ async def nx_create_drawing(
     name: str = "Sheet1",
     size: str = "A3",
     scale: float = 1.0,
-) -> str:
+) -> ToolResult | ToolError:
     """Create a new drawing sheet in the current work part."""
     try:
         size_upper = size.upper().strip()
@@ -66,17 +66,14 @@ async def nx_create_drawing(
                 error_code="NX_INVALID_PARAMS",
                 message=f"Unsupported sheet size: '{size}'.",
                 suggestion=f"Use one of: {valid}.",
-            ).to_text()
+            )
 
-        NXSession.get_instance().require()
         work_part = NXSession.get_instance().require_work_part()
 
         builder = work_part.DrawingSheets.CreateDrawingSheetBuilder()
         builder.Name = name
         builder.ScaleNumerator = scale
         builder.ScaleDenominator = 1.0
-
-        # Map standard size strings to builder settings
         builder.Size = size_upper
 
         sheet = builder.Commit()
@@ -89,10 +86,10 @@ async def nx_create_drawing(
                 "scale": f"{scale}:1",
             },
             message=f"Created drawing sheet '{sheet.Name}' (size={size_upper}, scale={scale}:1).",
-        ).to_text()
+        )
 
     except Exception as exc:
-        return ToolResult.from_exception(exc).to_text()
+        return ToolResult.from_exception(exc)
 
 
 # ---------------------------------------------------------------------------
@@ -119,7 +116,7 @@ async def nx_create_drawing(
         },
     },
 )
-async def nx_add_base_view(drawing: str, body: str, view: str) -> str:
+async def nx_add_base_view(drawing: str, body: str, view: str) -> ToolResult | ToolError:
     """Add a base view to a drawing sheet."""
     try:
         view_lower = view.lower().strip()
@@ -129,12 +126,10 @@ async def nx_add_base_view(drawing: str, body: str, view: str) -> str:
                 error_code="NX_INVALID_PARAMS",
                 message=f"Unsupported view orientation: '{view}'.",
                 suggestion=f"Use one of: {valid}.",
-            ).to_text()
+            )
 
-        NXSession.get_instance().require()
         work_part = NXSession.get_instance().require_work_part()
 
-        # Retrieve the drawing sheet by name
         sheets = work_part.DrawingSheets.ToArray()
         target_sheet = None
         for s in sheets:
@@ -147,9 +142,8 @@ async def nx_add_base_view(drawing: str, body: str, view: str) -> str:
                 error_code="NX_NOT_FOUND",
                 message=f"Drawing sheet '{drawing}' not found.",
                 suggestion="Use nx_create_drawing to create a sheet first.",
-            ).to_text()
+            )
 
-        # Create a base drawing view via the Drafting manager
         view_builder = work_part.DrawingViews.CreateBaseViewBuilder()
         view_builder.Style.Orientation = _VIEW_TYPES[view_lower]
         view_builder.Style.ScaleNumerator = 1.0
@@ -167,10 +161,10 @@ async def nx_add_base_view(drawing: str, body: str, view: str) -> str:
                 "body": body,
             },
             message=f"Added base view '{created_view.Name}' ({view_lower}) to sheet '{drawing}'.",
-        ).to_text()
+        )
 
     except Exception as exc:
-        return ToolResult.from_exception(exc).to_text()
+        return ToolResult.from_exception(exc)
 
 
 # ---------------------------------------------------------------------------
@@ -192,7 +186,7 @@ async def nx_add_base_view(drawing: str, body: str, view: str) -> str:
         },
     },
 )
-async def nx_add_projection_view(base_view: str, direction: str) -> str:
+async def nx_add_projection_view(base_view: str, direction: str) -> ToolResult | ToolError:
     """Add a projected view from an existing base view."""
     try:
         dir_lower = direction.lower().strip()
@@ -202,12 +196,10 @@ async def nx_add_projection_view(base_view: str, direction: str) -> str:
                 error_code="NX_INVALID_PARAMS",
                 message=f"Unsupported projection direction: '{direction}'.",
                 suggestion=f"Use one of: {valid}.",
-            ).to_text()
+            )
 
-        NXSession.get_instance().require()
         work_part = NXSession.get_instance().require_work_part()
 
-        # Find the base view by name
         views = work_part.DrawingViews.ToArray()
         parent_view = None
         for v in views:
@@ -220,9 +212,8 @@ async def nx_add_projection_view(base_view: str, direction: str) -> str:
                 error_code="NX_NOT_FOUND",
                 message=f"Base view '{base_view}' not found.",
                 suggestion="Ensure the base view name is correct.",
-            ).to_text()
+            )
 
-        # Create projected view
         proj_builder = work_part.DrawingViews.CreateProjectedViewBuilder()
         proj_builder.ParentView = parent_view
         proj_builder.Style.Orientation = dir_lower.capitalize()
@@ -239,10 +230,10 @@ async def nx_add_projection_view(base_view: str, direction: str) -> str:
                 "direction": dir_lower,
             },
             message=f"Added projection view '{created_view.Name}' ({dir_lower}) from '{base_view}'.",
-        ).to_text()
+        )
 
     except Exception as exc:
-        return ToolResult.from_exception(exc).to_text()
+        return ToolResult.from_exception(exc)
 
 
 # ---------------------------------------------------------------------------
@@ -279,7 +270,7 @@ async def nx_add_dimension(
     object1: str,
     object2: str | None = None,
     dim_type: str = "aligned",
-) -> str:
+) -> ToolResult | ToolError:
     """Add a dimension annotation to a drawing view."""
     try:
         dim_lower = dim_type.lower().strip()
@@ -289,20 +280,17 @@ async def nx_add_dimension(
                 error_code="NX_INVALID_PARAMS",
                 message=f"Unsupported dimension type: '{dim_type}'.",
                 suggestion=f"Use one of: {valid}.",
-            ).to_text()
+            )
 
-        # Diameter and radius require only one object
         if dim_lower in ("diameter", "radius") and object2 is not None:
             return ToolError(
                 error_code="NX_INVALID_PARAMS",
                 message=f"Dimension type '{dim_lower}' uses a single object; object2 should be omitted.",
                 suggestion="Set object2 to null or omit it for diameter/radius dimensions.",
-            ).to_text()
+            )
 
-        NXSession.get_instance().require()
         work_part = NXSession.get_instance().require_work_part()
 
-        # Find the target view
         views = work_part.DrawingViews.ToArray()
         target_view = None
         for v in views:
@@ -315,9 +303,8 @@ async def nx_add_dimension(
                 error_code="NX_NOT_FOUND",
                 message=f"Drawing view '{view}' not found.",
                 suggestion="Check view name with nx_list_open_parts or create it first.",
-            ).to_text()
+            )
 
-        # Create dimension via Annotations manager
         dim_builder = work_part.Annotations.CreateDimensionBuilder()
         dim_builder.DimensionType = dim_lower.capitalize()
         dim_builder.Object1 = object1
@@ -337,10 +324,10 @@ async def nx_add_dimension(
                 "object2": object2,
             },
             message=f"Added {dim_lower} dimension '{created_dim.Name}' to view '{view}'.",
-        ).to_text()
+        )
 
     except Exception as exc:
-        return ToolResult.from_exception(exc).to_text()
+        return ToolResult.from_exception(exc)
 
 
 # ---------------------------------------------------------------------------
@@ -357,10 +344,9 @@ async def nx_add_dimension(
         },
     },
 )
-async def nx_export_drawing_pdf(path: str) -> str:
+async def nx_export_drawing_pdf(path: str) -> ToolResult | ToolError:
     """Export the current drawing to PDF."""
     try:
-        NXSession.get_instance().require()
         work_part = NXSession.get_instance().require_work_part()
 
         exporter = work_part.ExportManager.CreatePdfExporter()
@@ -370,7 +356,7 @@ async def nx_export_drawing_pdf(path: str) -> str:
         return ToolResult.success(
             data={"path": path},
             message=f"Exported drawing to PDF: {path}",
-        ).to_text()
+        )
 
     except Exception as exc:
-        return ToolResult.from_exception(exc).to_text()
+        return ToolResult.from_exception(exc)

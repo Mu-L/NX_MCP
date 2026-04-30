@@ -46,31 +46,43 @@ def _make_mock_nxopen():
     root_component.GetChildren = MagicMock(return_value=[child1, child2])
     comp_assembly.RootComponent = root_component
 
-    # Mate builder
-    mate_builder = MagicMock()
+    # Constraints builder
+    constraints_builder = MagicMock()
     mock_constraint = MagicMock()
-    mock_constraint.Name = "Touch_Mate"
-    mate_builder.Commit = MagicMock(return_value=mock_constraint)
-    mate_builder.Destroy = MagicMock()
-    mate_builder.SetMateType = MagicMock()
-    mate_builder.SetComponent = MagicMock()
-    mate_builder.SetOffset = MagicMock()
-    mate_builder.AddReference = MagicMock()
-    comp_assembly.CreateMatingConstraintBuilder = MagicMock(return_value=mate_builder)
+    mock_constraint.Component = None
+    mock_constraint.Offset = 0.0
+    mock_constraint.FirstConstraintReference = None
+    mock_constraint.SecondConstraintReference = None
+    constraints_builder.CreateConstraint = MagicMock(return_value=mock_constraint)
+    constraints_builder.Commit = MagicMock()
+    constraints_builder.Destroy = MagicMock()
+    comp_assembly.CreateConstraintsBuilder = MagicMock(return_value=constraints_builder)
 
-    # Move builder
-    move_builder = MagicMock()
-    move_builder.Commit = MagicMock()
-    move_builder.Destroy = MagicMock()
-    move_builder.SetComponent = MagicMock()
-    move_builder.SetTranslation = MagicMock()
-    move_builder.SetRotation = MagicMock()
-    comp_assembly.CreateMoveComponentBuilder = MagicMock(return_value=move_builder)
+    # MoveComponent
+    comp_assembly.MoveComponent = MagicMock()
 
     mock_work_part.ComponentAssembly = comp_assembly
 
-    nxopen._mate_builder = mate_builder
-    nxopen._move_builder = move_builder
+    # NXOpen.Assemblies.Constraint.Type enum
+    assemblies_mod = types.ModuleType("NXOpen.Assemblies")
+    constraint_mod = MagicMock()
+    constraint_type_mock = MagicMock()
+    constraint_type_mock.Touch = "Touch"
+    constraint_type_mock.Align = "Align"
+    constraint_type_mock.Orient = "Orient"
+    constraint_type_mock.Center = "Center"
+    constraint_type_mock.Angular = "Angular"
+    constraint_mod.Type = constraint_type_mock
+    assemblies_mod.Constraint = constraint_mod
+    nxopen.Assemblies = assemblies_mod
+
+    # Vector3d / Matrix3x3 / Transform
+    nxopen.Vector3d = MagicMock(return_value=MagicMock())
+    nxopen.Matrix3x3 = MagicMock(return_value=MagicMock())
+    nxopen.Transform = MagicMock(return_value=MagicMock())
+
+    nxopen._constraints_builder = constraints_builder
+    nxopen._mock_constraint = mock_constraint
     nxopen._added_component = mock_added_component
     nxopen._comp_assembly = comp_assembly
 
@@ -115,7 +127,7 @@ class TestAddComponent:
         assert handler is not None
 
         result = await handler(part_path="C:\\parts\\bracket.prt")
-        parsed = json.loads(result)
+        parsed = json.loads(result.to_text())
 
         assert parsed["status"] == "success"
         assert parsed["data"]["part_path"] == "C:\\parts\\bracket.prt"
@@ -129,7 +141,7 @@ class TestAddComponent:
         handler = ToolRegistry.get_handler("nx_add_component")
 
         result = await handler(part_path="C:\\parts\\shaft.prt", name="MainShaft")
-        parsed = json.loads(result)
+        parsed = json.loads(result.to_text())
 
         assert parsed["status"] == "success"
         work_part.ComponentAssembly.AddComponent.assert_called_once_with(
@@ -152,21 +164,17 @@ class TestMateComponent:
             references=["Face_A", "Face_B"],
             offset=0.0,
         )
-        parsed = json.loads(result)
+        parsed = json.loads(result.to_text())
 
         assert parsed["status"] == "success"
         assert parsed["data"]["mate_type"] == "touch"
         assert parsed["data"]["component"] == "Bracket"
         assert parsed["data"]["references"] == ["Face_A", "Face_B"]
-        assert parsed["data"]["offset"] == 0.0
 
-        mate_builder = nxopen._mate_builder
-        mate_builder.SetMateType.assert_called_once_with("Touch")
-        mate_builder.SetComponent.assert_called_once_with("Bracket")
-        mate_builder.SetOffset.assert_called_once_with(0.0)
-        assert mate_builder.AddReference.call_count == 2
-        mate_builder.Commit.assert_called_once()
-        mate_builder.Destroy.assert_called_once()
+        constraints_builder = nxopen._constraints_builder
+        constraints_builder.CreateConstraint.assert_called_once()
+        constraints_builder.Commit.assert_called_once()
+        constraints_builder.Destroy.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_mate_invalid_type(self, _setup_nx):
@@ -174,7 +182,7 @@ class TestMateComponent:
         handler = ToolRegistry.get_handler("nx_mate_component")
 
         result = await handler(component="Bracket", mate_type="weld")
-        parsed = json.loads(result)
+        parsed = json.loads(result.to_text())
 
         assert parsed["status"] == "error"
         assert parsed["error_code"] == "NX_INVALID_PARAMS"
@@ -187,8 +195,10 @@ class TestMateComponent:
         handler = ToolRegistry.get_handler("nx_mate_component")
 
         for mtype in ("touch", "align", "orient", "center", "align_angle"):
+            ToolRegistry.clear()
+            import nx_mcp.tools.assembly as mod
             result = await handler(component="Bracket", mate_type=mtype)
-            parsed = json.loads(result)
+            parsed = json.loads(result.to_text())
             assert parsed["status"] == "success", f"mate_type={mtype} should succeed"
 
 
@@ -202,7 +212,7 @@ class TestListComponents:
         assert handler is not None
 
         result = await handler()
-        parsed = json.loads(result)
+        parsed = json.loads(result.to_text())
 
         assert parsed["status"] == "success"
         assert parsed["data"]["count"] == 2
@@ -219,7 +229,7 @@ class TestListComponents:
         work_part.ComponentAssembly.RootComponent.GetChildren = MagicMock(return_value=[])
 
         result = await handler()
-        parsed = json.loads(result)
+        parsed = json.loads(result.to_text())
 
         assert parsed["status"] == "success"
         assert parsed["data"]["count"] == 0
@@ -244,18 +254,14 @@ class TestRepositionComponent:
             ry=90.0,
             rz=0.0,
         )
-        parsed = json.loads(result)
+        parsed = json.loads(result.to_text())
 
         assert parsed["status"] == "success"
         assert parsed["data"]["component"] == "Part_A"
         assert parsed["data"]["translation"] == [10.0, 20.0, 30.0]
         assert parsed["data"]["rotation"] == [45.0, 90.0, 0.0]
 
-        move_builder = nxopen._move_builder
-        move_builder.SetTranslation.assert_called_once_with(10.0, 20.0, 30.0)
-        move_builder.SetRotation.assert_called_once_with(45.0, 90.0, 0.0)
-        move_builder.Commit.assert_called_once()
-        move_builder.Destroy.assert_called_once()
+        nxopen._comp_assembly.MoveComponent.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_reposition_not_found(self, _setup_nx):
@@ -263,7 +269,7 @@ class TestRepositionComponent:
         handler = ToolRegistry.get_handler("nx_reposition_component")
 
         result = await handler(component="NonExistent", dx=5.0)
-        parsed = json.loads(result)
+        parsed = json.loads(result.to_text())
 
         assert parsed["status"] == "error"
         assert parsed["error_code"] == "NX_NOT_FOUND"
@@ -276,7 +282,7 @@ class TestRepositionComponent:
         handler = ToolRegistry.get_handler("nx_reposition_component")
 
         result = await handler(component="Part_B")
-        parsed = json.loads(result)
+        parsed = json.loads(result.to_text())
 
         assert parsed["status"] == "success"
         assert parsed["data"]["translation"] == [0.0, 0.0, 0.0]

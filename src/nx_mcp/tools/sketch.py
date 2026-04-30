@@ -242,7 +242,7 @@ async def nx_sketch_rectangle(
 # 5. nx_sketch_constraint
 # ---------------------------------------------------------------------------
 
-_VALID_CONSTRAINT_TYPES = {
+_GEOMETRIC_CONSTRAINT_TYPES = {
     "horizontal",
     "vertical",
     "parallel",
@@ -250,10 +250,13 @@ _VALID_CONSTRAINT_TYPES = {
     "tangent",
     "equal_length",
     "fix",
-    "dimension",
     "coincident",
     "midpoint",
     "concentric",
+}
+
+_DIMENSIONAL_CONSTRAINT_TYPES = {
+    "dimension",
 }
 
 
@@ -286,27 +289,58 @@ async def nx_sketch_constraint(
     try:
         import NXOpen
 
-        session = NXSession.get_instance().require()
         work_part = NXSession.get_instance().require_work_part()
 
         key = constraint_type.strip().lower()
-        if key not in _VALID_CONSTRAINT_TYPES:
-            valid = ", ".join(sorted(_VALID_CONSTRAINT_TYPES))
+        all_valid = _GEOMETRIC_CONSTRAINT_TYPES | _DIMENSIONAL_CONSTRAINT_TYPES
+        if key not in all_valid:
+            valid = ", ".join(sorted(all_valid))
             return ToolError(
                 error_code="NX_INVALID_PARAMS",
                 message=f"Invalid constraint type '{constraint_type}'.",
                 suggestion=f"Use one of: {valid}.",
             )
 
-        builder = work_part.Sketches.CreateConstraintBuilder()
-        builder.SetConstraintType(key)
-        for target_name in targets:
-            builder.AddTarget(target_name)
-        if value is not None:
-            builder.SetValue(value)
-
-        builder.Commit()
-        builder.Destroy()
+        if key in _GEOMETRIC_CONSTRAINT_TYPES:
+            # Map constraint type names to NXOpen.Sketch.GeometricConstraintType enums
+            geo_map = {
+                "horizontal": NXOpen.Sketch.GeometricConstraintType.Horizontal,
+                "vertical": NXOpen.Sketch.GeometricConstraintType.Vertical,
+                "parallel": NXOpen.Sketch.GeometricConstraintType.Parallel,
+                "perpendicular": NXOpen.Sketch.GeometricConstraintType.Perpendicular,
+                "tangent": NXOpen.Sketch.GeometricConstraintType.Tangent,
+                "equal_length": NXOpen.Sketch.GeometricConstraintType.EqualLength,
+                "fix": NXOpen.Sketch.GeometricConstraintType.Fixed,
+                "coincident": NXOpen.Sketch.GeometricConstraintType.Coincident,
+                "midpoint": NXOpen.Sketch.GeometricConstraintType.Midpoint,
+                "concentric": NXOpen.Sketch.GeometricConstraintType.Concentric,
+            }
+            constraint_enum = geo_map[key]
+            sketch = work_part.Sketches.ActiveSketch
+            if sketch is None:
+                return ToolError(
+                    error_code="NX_NO_ACTIVE_SKETCH",
+                    message="No active sketch. Use nx_create_sketch first.",
+                )
+            sketch.CreateGeometricConstraint(constraint_enum, targets)
+        else:
+            # Dimensional constraint
+            if value is None:
+                return ToolError(
+                    error_code="NX_INVALID_PARAMS",
+                    message="Dimensional constraints require a 'value' parameter.",
+                )
+            sketch = work_part.Sketches.ActiveSketch
+            if sketch is None:
+                return ToolError(
+                    error_code="NX_NO_ACTIVE_SKETCH",
+                    message="No active sketch. Use nx_create_sketch first.",
+                )
+            sketch.CreateDimension(
+                NXOpen.Sketch.ConstraintType.HorizontalDimension,
+                targets,
+                value,
+            )
 
         data: dict[str, Any] = {
             "constraint_type": key,
@@ -336,12 +370,14 @@ async def nx_finish_sketch() -> ToolResult | ToolError:
     try:
         import NXOpen
 
-        session = NXSession.get_instance().require()
+        work_part = NXSession.get_instance().require_work_part()
 
-        # ActiveSketch is an attribute on the session that provides Exit()
-        active_sketch = session.ActiveSketch
+        active_sketch = work_part.Sketches.ActiveSketch
         if active_sketch is not None:
-            active_sketch.Exit()
+            active_sketch.Deactivate(
+                NXOpen.Sketch.ViewOrientation.TrueValue,
+                NXOpen.Sketch.CloseLevel.FalseValue,
+            )
 
         return ToolResult.success(
             data={},
